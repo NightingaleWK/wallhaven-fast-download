@@ -330,11 +330,25 @@
         try {
             const download = await resolveDownload(card, wallpaperId);
             await downloadFile(download.url, download.name);
+            triggerSeenTracking(wallpaperId);
         } catch (error) {
             showToast(`下载失败：${error.message}`, true);
         } finally {
             button.disabled = false;
         }
+    }
+
+    function triggerSeenTracking(wallpaperId) {
+        const iframe = document.createElement('iframe');
+        iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;';
+        iframe.src = `https://wallhaven.cc/w/${encodeURIComponent(wallpaperId)}`;
+        document.body.appendChild(iframe);
+
+        setTimeout(() => {
+            if (iframe.parentNode) {
+                iframe.remove();
+            }
+        }, 5000);
     }
 
     function stopCardClick(event) {
