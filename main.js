@@ -225,10 +225,10 @@
     }
 
     function getFileExtension(card) {
-        if (card.querySelector('span.png, .png')) {
+        if (card.querySelector('span.png')) {
             return 'png';
         }
-        if (card.querySelector('span.webp, .webp')) {
+        if (card.querySelector('span.webp')) {
             return 'webp';
         }
         return 'jpg';
