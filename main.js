@@ -396,7 +396,6 @@
             image.decoding = 'async';
 
             image.addEventListener('load', () => {
-                popover.replaceChildren(image);
                 resolve();
             }, { once: true });
 
@@ -404,6 +403,7 @@
                 reject(new Error('预览图片加载失败'));
             }, { once: true });
 
+            popover.replaceChildren(image);
             image.src = url;
         });
     }
