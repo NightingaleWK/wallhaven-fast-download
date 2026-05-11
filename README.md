@@ -1,16 +1,15 @@
 # wallhaven-fast-download
 
-wallhaven-fast-download 是一个用于 Wallhaven 网格浏览页的用户脚本。它会在鼠标悬停到壁纸卡片时显示下载和快速预览按钮，解析原图地址，并通过用户脚本管理器下载文件。
+Wallhaven 快速下载脚本 —— 悬停自动预览原图，一键下载，自动标记已看。
 
 ## 功能
 
-- 在 Wallhaven 列表/网格页为壁纸卡片添加悬停下载按钮。
-- 在下载按钮右侧添加轻量快速预览按钮，原地查看按缩略图宽度 120% 显示的原图预览。
-- 优先通过 Wallhaven wallpaper API 获取原图地址。
-- API 请求失败时，回退到 Wallhaven 公开原图 URL 规则。
-- 使用 `GM_download` 下载文件，不手动创建 Blob URL。
-- 不依赖 jQuery，不加载外部运行时代码。
-- 下载或预览失败时显示简短错误提示。
+- **悬停自动预览**：鼠标移到壁纸卡片上，自动弹出原图预览窗口，逐行渐进渲染，移出即关。
+- **一键下载**：点击 ↓ 按钮通过 `GM_download` 下载原图。
+- **下载标记已看**：下载成功后后台模拟访问详情页，Wallhaven 自动标记为已看，避免重复下载。
+- **预览渐进渲染**：图片边传输边显示，不等完整下载。
+- **API 优先，回退规则**：优先通过 Wallpaper API 获取原图地址，失败时回退到公开 CDN 规则。
+- **无外部依赖**：纯原生 JS，不依赖 jQuery 或其他库。
 
 ## 安装
 
@@ -24,7 +23,7 @@ https://wallhaven.cc/*
 
 ## 实现说明
 
-本项目代码全部由 ChatGPT 5.5 编写。脚本使用原生 DOM API、`MutationObserver`、`GM_xmlhttpRequest`、Wallhaven API 解析、`GM_download`，并实现悬停工具按钮组、卡片内快速预览层和 toast 提示 UI。
+本项目代码全部由 AI 辅助编写（ChatGPT 5.5 + Claude），人工调整优化。脚本使用原生 DOM API、`MutationObserver`、`GM_xmlhttpRequest`、Wallpaper API、`GM_download`，并实现悬停工具按钮、卡片内渐进预览层、防抖 hover 触发和 iframe 后台 seen 标记机制。
 
 ## 许可证
 

@@ -2,9 +2,9 @@
 // @name                Wallhaven Fast Download
 // @name:zh-CN          Wallhaven 快速下载
 // @name:en             Wallhaven Fast Download
-// @description         在 Wallhaven 网格浏览页悬停图片时显示原图下载和快速预览按钮
-// @description:zh-CN   在 Wallhaven 网格浏览页悬停图片时显示原图下载和快速预览按钮，并通过脚本管理器下载文件
-// @description:en      Adds hover download and quick preview buttons to Wallhaven grid pages and downloads wallpapers through the userscript manager
+// @description         在 Wallhaven 网格浏览页悬停图片时显示原图下载按钮和自动预览，下载后自动标记为已看
+// @description:zh-CN   在 Wallhaven 网格浏览页悬停图片时显示下载按钮并自动预览原图，下载后后台标记已看，避免重复下载
+// @description:en      Adds download button and auto-preview on hover to Wallhaven grid pages. Marks wallpapers as seen after download to prevent duplicates.
 // @author              NightingaleWK
 // @namespace           https://github.com/NightingaleWK
 // @homepageURL         https://github.com/NightingaleWK/wallhaven-fast-download
@@ -16,7 +16,7 @@
 // @connect             wallhaven.cc
 // @connect             w.wallhaven.cc
 // @run-at              document-end
-// @version             1.0.0
+// @version             1.1.0
 // ==/UserScript==
 
 (function () {
