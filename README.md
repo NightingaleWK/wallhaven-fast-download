@@ -23,7 +23,7 @@ https://wallhaven.cc/*
 
 ## 实现说明
 
-本项目代码全部由 AI 辅助编写（ChatGPT 5.5 + Claude），人工调整优化。脚本使用原生 DOM API、`MutationObserver`、`GM_xmlhttpRequest`、Wallpaper API、`GM_download`，并实现悬停工具按钮、卡片内渐进预览层、防抖 hover 触发和 iframe 后台 seen 标记机制。
+本项目代码全部由 AI 辅助编写（ChatGPT 5.5 + DeepSeek V4 Pro），人工调整优化。脚本使用原生 DOM API、`MutationObserver`、`GM_xmlhttpRequest`、Wallpaper API、`GM_download`，并实现悬停工具按钮、卡片内渐进预览层、防抖 hover 触发和 iframe 后台 seen 标记机制。
 
 ## 许可证
 
