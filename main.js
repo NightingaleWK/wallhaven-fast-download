@@ -29,12 +29,14 @@
         injectedAttr: 'data-whfd-injected',
         toolGroupClass: 'whfd-tool-group',
         buttonClass: 'whfd-download-button',
-        previewButtonClass: 'whfd-preview-button',
         toastId: 'whfd-toast',
+        previewDelay: 150,
     };
 
     const STYLE_ID = 'whfd-style';
     let currentPreview = null;
+    let previewTimeout = null;
+    let hoveredCard = null;
 
     function injectStyles() {
         if (document.getElementById(STYLE_ID)) {
@@ -61,8 +63,7 @@
                 transition: opacity 0.15s ease, transform 0.15s ease;
             }
 
-            .whfd-download-button,
-            .whfd-preview-button {
+            .whfd-download-button {
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
@@ -91,16 +92,13 @@
             }
 
             .whfd-download-button:hover,
-            .whfd-preview-button:hover,
-            .whfd-download-button:focus-visible,
-            .whfd-preview-button:focus-visible {
+            .whfd-download-button:focus-visible {
                 background: rgba(17, 17, 17, 0.92);
                 border-color: rgba(255, 255, 255, 0.34);
                 outline: none;
             }
 
-            .whfd-download-button:disabled,
-            .whfd-preview-button:disabled {
+            .whfd-download-button:disabled {
                 cursor: wait;
                 opacity: 0.68;
             }
@@ -351,11 +349,6 @@
 
         currentPreview.popover.remove();
         currentPreview = null;
-        document.removeEventListener('click', handleDocumentPreviewClose, true);
-    }
-
-    function handleDocumentPreviewClose() {
-        closeCurrentPreview();
     }
 
     function getPreviewWidth(card, figure) {
@@ -408,16 +401,14 @@
         });
     }
 
-    async function handlePreview(card, button) {
+    async function showCardPreview(card) {
         const wallpaperId = getWallpaperId(card);
         if (!wallpaperId) {
-            showToast('无法识别当前卡片的 Wallpaper ID', true);
             return;
         }
 
         const figure = getCardFigure(card);
         if (!figure) {
-            showToast('无法定位当前预览卡片', true);
             return;
         }
 
@@ -430,22 +421,45 @@
             popover,
         };
 
-        setTimeout(() => {
-            if (currentPreview && currentPreview.popover === popover) {
-                document.addEventListener('click', handleDocumentPreviewClose, true);
-            }
-        }, 0);
-
-        button.disabled = true;
         try {
             const preview = await resolveDownload(card, wallpaperId);
-            await loadPreviewImage(popover, preview.url);
+            if (currentPreview && currentPreview.card === card) {
+                await loadPreviewImage(popover, preview.url);
+            }
         } catch (error) {
-            showPreviewError(popover, error.message || '预览加载失败');
-            showToast(`预览失败：${error.message}`, true);
-        } finally {
-            button.disabled = false;
+            if (currentPreview && currentPreview.card === card) {
+                showPreviewError(popover, error.message || '预览加载失败');
+            }
         }
+    }
+
+    function bindHoverPreview(card, figure) {
+        figure.addEventListener('mouseenter', () => {
+            hoveredCard = card;
+            clearTimeout(previewTimeout);
+
+            if (currentPreview && currentPreview.card === card) {
+                return;
+            }
+
+            closeCurrentPreview();
+
+            previewTimeout = setTimeout(() => {
+                if (hoveredCard === card) {
+                    showCardPreview(card);
+                }
+            }, CONFIG.previewDelay);
+        });
+
+        figure.addEventListener('mouseleave', () => {
+            clearTimeout(previewTimeout);
+            if (hoveredCard === card) {
+                hoveredCard = null;
+            }
+            if (currentPreview && currentPreview.card === card) {
+                closeCurrentPreview();
+            }
+        });
     }
 
     function buildDownloadButton(card) {
@@ -464,31 +478,11 @@
         return button;
     }
 
-    function buildPreviewButton(card) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = CONFIG.previewButtonClass;
-        button.textContent = 'P';
-        button.title = '快速预览原图';
-        button.setAttribute('aria-label', '快速预览原图');
-
-        button.addEventListener('click', (event) => {
-            stopCardClick(event);
-            handlePreview(card, button);
-        });
-
-        return button;
-    }
-
     function buildToolGroup(card) {
         const group = document.createElement('div');
         group.className = CONFIG.toolGroupClass;
         const downloadButton = buildDownloadButton(card);
-        const previewButton = buildPreviewButton(card);
-
         group.appendChild(downloadButton);
-        group.appendChild(previewButton);
-
         return group;
     }
 
@@ -506,7 +500,6 @@
         if (
             card.getAttribute(CONFIG.injectedAttr) === '1'
             && findDirectChildByClass(figure, CONFIG.toolGroupClass)
-            && figure.querySelector(`.${CONFIG.previewButtonClass}`)
         ) {
             return;
         }
@@ -524,10 +517,9 @@
         figure.classList.add('whfd-card-target');
         const toolGroup = buildToolGroup(card);
         figure.insertBefore(toolGroup, figure.firstChild);
-        if (!toolGroup.querySelector(`.${CONFIG.previewButtonClass}`)) {
-            toolGroup.appendChild(buildPreviewButton(card));
-        }
         card.setAttribute(CONFIG.injectedAttr, '1');
+
+        bindHoverPreview(card, figure);
     }
 
     function scanCards() {
