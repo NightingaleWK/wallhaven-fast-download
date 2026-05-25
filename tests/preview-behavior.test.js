@@ -38,3 +38,33 @@ assert(
     /clearPreviewBadge\(popover\)/.test(source),
     'preview badge should be removed after the full-resolution image is ready'
 );
+
+assert(
+    /function setDownloadButtonState\(button, state\)/.test(source),
+    'download button should have a state helper for lightweight loading and success feedback'
+);
+
+assert(
+    /setDownloadButtonState\(button, 'loading'\)/.test(source),
+    'clicking download should show a lightweight loading state'
+);
+
+assert(
+    /setDownloadButtonState\(button, 'success'\)/.test(source),
+    'successful download should briefly show a success check mark'
+);
+
+assert(
+    /setTimeout\(\(\) => \{\s*if \(button\.dataset\.whfdState === 'success'\) \{\s*setDownloadButtonState\(button, 'idle'\)/.test(source),
+    'successful download should reset to idle so users can download again'
+);
+
+assert(
+    source.includes('.whfd-tool-group.is-download-active'),
+    'download tool group should stay visible while download feedback is active'
+);
+
+assert(
+    /if \(button\.parentElement\) \{\s*button\.parentElement\.classList\.toggle\('is-download-active', state === 'loading' \|\| state === 'success'\)/.test(source),
+    'download active state should be scoped to the existing tool group'
+);

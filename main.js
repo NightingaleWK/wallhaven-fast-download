@@ -16,7 +16,7 @@
 // @connect             wallhaven.cc
 // @connect             w.wallhaven.cc
 // @run-at              document-end
-// @version             1.1.0
+// @version             1.2.0
 // ==/UserScript==
 
 (function () {
@@ -86,7 +86,8 @@
             .thumb:hover > .whfd-tool-group,
             .thumb:focus > .whfd-tool-group,
             .thumb:focus-within > .whfd-tool-group,
-            .whfd-tool-group:focus-within {
+            .whfd-tool-group:focus-within,
+            .whfd-tool-group.is-download-active {
                 opacity: 1;
                 pointer-events: auto;
                 transform: translateY(0);
@@ -102,6 +103,15 @@
             .whfd-download-button:disabled {
                 cursor: wait;
                 opacity: 0.68;
+            }
+
+            .whfd-download-button.is-loading {
+                cursor: wait;
+            }
+
+            .whfd-download-button.is-success {
+                background: rgba(35, 115, 65, 0.86);
+                border-color: rgba(178, 255, 201, 0.42);
             }
 
             .whfd-preview-popover {
@@ -346,15 +356,20 @@
             return;
         }
 
-        button.disabled = true;
+        setDownloadButtonState(button, 'loading');
         try {
             const download = await resolveDownload(card, wallpaperId);
             await downloadFile(download.url, download.name);
             triggerSeenTracking(wallpaperId);
+            setDownloadButtonState(button, 'success');
+            setTimeout(() => {
+                if (button.dataset.whfdState === 'success') {
+                    setDownloadButtonState(button, 'idle');
+                }
+            }, 1200);
         } catch (error) {
             showToast(`下载失败：${error.message}`, true);
-        } finally {
-            button.disabled = false;
+            setDownloadButtonState(button, 'idle');
         }
     }
 
@@ -495,7 +510,7 @@
 
         const thumbnailPreview = getThumbnailPreview(card, figure);
         if (thumbnailPreview) {
-            loadPreviewImage(popover, thumbnailPreview.url).catch(() => {});
+            loadPreviewImage(popover, thumbnailPreview.url).catch(() => { });
             setPreviewBadge(popover, '缩略图 · 加载原图...');
         }
 
@@ -545,9 +560,7 @@
         const button = document.createElement('button');
         button.type = 'button';
         button.className = CONFIG.buttonClass;
-        button.textContent = '↓';
-        button.title = '快速下载原图';
-        button.setAttribute('aria-label', '快速下载原图');
+        setDownloadButtonState(button, 'idle');
 
         button.addEventListener('click', (event) => {
             stopCardClick(event);
@@ -555,6 +568,36 @@
         });
 
         return button;
+    }
+
+    function setDownloadButtonState(button, state) {
+        button.dataset.whfdState = state;
+        button.classList.toggle('is-loading', state === 'loading');
+        button.classList.toggle('is-success', state === 'success');
+        if (button.parentElement) {
+            button.parentElement.classList.toggle('is-download-active', state === 'loading' || state === 'success');
+        }
+
+        if (state === 'loading') {
+            button.disabled = true;
+            button.textContent = '…';
+            button.title = '正在请求并下载原图';
+            button.setAttribute('aria-label', '正在请求并下载原图');
+            return;
+        }
+
+        if (state === 'success') {
+            button.disabled = false;
+            button.textContent = '✓';
+            button.title = '下载成功，可再次点击下载';
+            button.setAttribute('aria-label', '下载成功，可再次点击下载');
+            return;
+        }
+
+        button.disabled = false;
+        button.textContent = '↓';
+        button.title = '快速下载原图';
+        button.setAttribute('aria-label', '快速下载原图');
     }
 
     function buildToolGroup(card) {
