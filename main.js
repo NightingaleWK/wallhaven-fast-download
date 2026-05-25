@@ -30,10 +30,11 @@
         toolGroupClass: 'whfd-tool-group',
         buttonClass: 'whfd-download-button',
         toastId: 'whfd-toast',
-        previewDelay: 150,
+        previewDelay: 50,
     };
 
     const STYLE_ID = 'whfd-style';
+    const downloadInfoCache = new Map();
     let currentPreview = null;
     let previewTimeout = null;
     let hoveredCard = null;
@@ -136,6 +137,23 @@
                 font-size: 13px;
                 line-height: 1.4;
                 color: rgba(255, 255, 255, 0.86);
+            }
+
+            .whfd-preview-badge {
+                position: absolute;
+                top: 6px;
+                left: 6px;
+                z-index: 1;
+                max-width: calc(100% - 12px);
+                box-sizing: border-box;
+                padding: 3px 6px;
+                border-radius: 4px;
+                background: rgba(12, 12, 12, 0.62);
+                color: rgba(255, 255, 255, 0.88);
+                font-size: 11px;
+                line-height: 1.35;
+                pointer-events: none;
+                white-space: nowrap;
             }
 
             .whfd-preview-popover.is-error {
@@ -293,11 +311,13 @@
     }
 
     async function resolveDownload(card, wallpaperId) {
-        try {
-            return await fetchWallpaperInfo(wallpaperId);
-        } catch (error) {
-            return getFallbackDownload(card, wallpaperId);
+        if (downloadInfoCache.has(wallpaperId)) {
+            return downloadInfoCache.get(wallpaperId);
         }
+
+        const downloadInfo = fetchWallpaperInfo(wallpaperId).catch(() => getFallbackDownload(card, wallpaperId));
+        downloadInfoCache.set(wallpaperId, downloadInfo);
+        return downloadInfo;
     }
 
     function downloadFile(url, name) {
@@ -373,6 +393,22 @@
         return Math.max(120, Math.round(width * 1.2));
     }
 
+    function getThumbnailPreview(card, figure) {
+        const thumbnail = figure.querySelector('img') || card.querySelector('img');
+        if (!thumbnail) {
+            return null;
+        }
+
+        const url = thumbnail.currentSrc || thumbnail.src || thumbnail.dataset.src || thumbnail.dataset.original;
+        if (!url) {
+            return null;
+        }
+
+        return {
+            url,
+        };
+    }
+
     function buildPreviewPopover(card, figure) {
         const popover = document.createElement('div');
         popover.className = 'whfd-preview-popover';
@@ -396,13 +432,33 @@
         popover.appendChild(status);
     }
 
-    function loadPreviewImage(popover, url) {
+    function setPreviewBadge(popover, message) {
+        let badge = findDirectChildByClass(popover, 'whfd-preview-badge');
+        if (!badge) {
+            badge = document.createElement('div');
+            badge.className = 'whfd-preview-badge';
+            popover.appendChild(badge);
+        }
+        badge.textContent = message;
+    }
+
+    function clearPreviewBadge(popover) {
+        const badge = findDirectChildByClass(popover, 'whfd-preview-badge');
+        if (badge) {
+            badge.remove();
+        }
+    }
+
+    function loadPreviewImage(popover, url, options = {}) {
         return new Promise((resolve, reject) => {
             const image = document.createElement('img');
             image.alt = '快速预览';
             image.decoding = 'async';
 
             image.addEventListener('load', () => {
+                if (options.preserveExisting) {
+                    popover.replaceChildren(image);
+                }
                 resolve();
             }, { once: true });
 
@@ -410,7 +466,9 @@
                 reject(new Error('预览图片加载失败'));
             }, { once: true });
 
-            popover.replaceChildren(image);
+            if (!options.preserveExisting) {
+                popover.replaceChildren(image);
+            }
             image.src = url;
         });
     }
@@ -435,10 +493,17 @@
             popover,
         };
 
+        const thumbnailPreview = getThumbnailPreview(card, figure);
+        if (thumbnailPreview) {
+            loadPreviewImage(popover, thumbnailPreview.url).catch(() => {});
+            setPreviewBadge(popover, '缩略图 · 加载原图...');
+        }
+
         try {
             const preview = await resolveDownload(card, wallpaperId);
             if (currentPreview && currentPreview.card === card) {
-                await loadPreviewImage(popover, preview.url);
+                await loadPreviewImage(popover, preview.url, { preserveExisting: true });
+                clearPreviewBadge(popover);
             }
         } catch (error) {
             if (currentPreview && currentPreview.card === card) {
