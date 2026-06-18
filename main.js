@@ -139,6 +139,19 @@
                 max-height: none;
             }
 
+            .whfd-preview-meta {
+                box-sizing: border-box;
+                width: 100%;
+                padding: 6px 8px;
+                border-top: 1px solid rgba(255, 255, 255, 0.12);
+                background: rgba(10, 10, 10, 0.92);
+                color: rgba(255, 255, 255, 0.88);
+                font-size: 12px;
+                line-height: 1.35;
+                text-align: center;
+                white-space: nowrap;
+            }
+
             .whfd-preview-status {
                 box-sizing: border-box;
                 width: 100%;
@@ -424,6 +437,13 @@
         };
     }
 
+    function getPreviewMetaText(card) {
+        const wallResolution = card.querySelector('.wall-res');
+        const text = wallResolution ? wallResolution.textContent || '' : card.textContent || '';
+        const resolution = text.match(/\b\d{3,5}\s*x\s*\d{3,5}\b/i);
+        return resolution ? resolution[0].replace(/\s*x\s*/i, ' x ') : '';
+    }
+
     function buildPreviewPopover(card, figure) {
         const popover = document.createElement('div');
         popover.className = 'whfd-preview-popover';
@@ -435,6 +455,17 @@
         popover.appendChild(status);
 
         return popover;
+    }
+
+    function appendPreviewMeta(popover, text) {
+        if (!text) {
+            return;
+        }
+
+        const meta = document.createElement('div');
+        meta.className = 'whfd-preview-meta';
+        meta.textContent = text;
+        popover.appendChild(meta);
     }
 
     function showPreviewError(popover, message) {
@@ -473,6 +504,7 @@
             image.addEventListener('load', () => {
                 if (options.preserveExisting) {
                     popover.replaceChildren(image);
+                    appendPreviewMeta(popover, options.metaText);
                 }
                 resolve();
             }, { once: true });
@@ -483,6 +515,7 @@
 
             if (!options.preserveExisting) {
                 popover.replaceChildren(image);
+                appendPreviewMeta(popover, options.metaText);
             }
             image.src = url;
         });
@@ -503,6 +536,7 @@
 
         const popover = buildPreviewPopover(card, figure);
         figure.appendChild(popover);
+        const previewMetaText = getPreviewMetaText(card);
         currentPreview = {
             card,
             popover,
@@ -510,14 +544,14 @@
 
         const thumbnailPreview = getThumbnailPreview(card, figure);
         if (thumbnailPreview) {
-            loadPreviewImage(popover, thumbnailPreview.url).catch(() => { });
+            loadPreviewImage(popover, thumbnailPreview.url, { metaText: previewMetaText }).catch(() => { });
             setPreviewBadge(popover, '缩略图 · 加载原图...');
         }
 
         try {
             const preview = await resolveDownload(card, wallpaperId);
             if (currentPreview && currentPreview.card === card) {
-                await loadPreviewImage(popover, preview.url, { preserveExisting: true });
+                await loadPreviewImage(popover, preview.url, { preserveExisting: true, metaText: previewMetaText });
                 clearPreviewBadge(popover);
             }
         } catch (error) {

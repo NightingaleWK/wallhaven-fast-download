@@ -20,13 +20,35 @@ assert(
 );
 
 assert(
-    /loadPreviewImage\(popover, preview\.url, \{ preserveExisting: true \}\)/.test(source),
+    /loadPreviewImage\(popover, preview\.url, \{[^}]*preserveExisting: true[^}]*\}\)/.test(source),
     'full-resolution preview should replace the thumbnail without clearing the existing preview first'
 );
 
 assert(
     source.includes('whfd-preview-badge'),
     'thumbnail preview should show a lightweight badge while the original image is loading'
+);
+
+assert(
+    source.includes('whfd-preview-meta'),
+    'preview should include a footer area for wallpaper metadata such as resolution'
+);
+
+assert(
+    /function getPreviewMetaText\(/.test(source),
+    'preview should extract resolution metadata from the hovered card'
+);
+
+assert(
+    /card\.querySelector\('\.wall-res'\)/.test(source),
+    'preview metadata should prefer Wallhaven card resolution text from .wall-res'
+);
+
+assert(
+    /loadPreviewImage\(popover, thumbnailPreview\.url, \{ metaText: previewMetaText \}\)/.test(source)
+        && /loadPreviewImage\(popover, preview\.url, \{[^}]*metaText: previewMetaText[^}]*\}\)/.test(source)
+        && /appendPreviewMeta\(popover, options\.metaText\)/.test(source),
+    'preview should append extracted metadata below both thumbnail and full-resolution preview images'
 );
 
 assert(
