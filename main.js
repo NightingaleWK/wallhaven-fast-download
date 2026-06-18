@@ -16,7 +16,7 @@
 // @connect             wallhaven.cc
 // @connect             w.wallhaven.cc
 // @run-at              document-end
-// @version             1.2.0
+// @version             1.3.0
 // ==/UserScript==
 
 (function () {
