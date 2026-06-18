@@ -152,6 +152,39 @@
                 white-space: nowrap;
             }
 
+            .whfd-preview-progress {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 6px;
+                box-sizing: border-box;
+                width: 100%;
+                padding: 7px 8px;
+                border-top: 1px solid rgba(255, 255, 255, 0.1);
+                background: rgba(10, 10, 10, 0.92);
+                color: rgba(255, 255, 255, 0.82);
+                font-size: 12px;
+                line-height: 1.35;
+                text-align: center;
+            }
+
+            .whfd-preview-spinner {
+                flex: 0 0 auto;
+                width: 12px;
+                height: 12px;
+                box-sizing: border-box;
+                border: 2px solid rgba(255, 255, 255, 0.28);
+                border-top-color: rgba(255, 255, 255, 0.9);
+                border-radius: 50%;
+                animation: whfd-spin 0.8s linear infinite;
+            }
+
+            @keyframes whfd-spin {
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+
             .whfd-preview-status {
                 box-sizing: border-box;
                 width: 100%;
@@ -468,6 +501,37 @@
         popover.appendChild(meta);
     }
 
+    function setPreviewProgress(popover, message) {
+        let progress = findDirectChildByClass(popover, 'whfd-preview-progress');
+        if (!progress) {
+            progress = document.createElement('div');
+            progress.className = 'whfd-preview-progress';
+
+            const spinner = document.createElement('span');
+            spinner.className = 'whfd-preview-spinner';
+            spinner.setAttribute('aria-hidden', 'true');
+            progress.appendChild(spinner);
+
+            const text = document.createElement('span');
+            text.className = 'whfd-preview-progress-text';
+            progress.appendChild(text);
+
+            popover.appendChild(progress);
+        }
+
+        const text = findDirectChildByClass(progress, 'whfd-preview-progress-text');
+        if (text) {
+            text.textContent = message;
+        }
+    }
+
+    function clearPreviewProgress(popover) {
+        const progress = findDirectChildByClass(popover, 'whfd-preview-progress');
+        if (progress) {
+            progress.remove();
+        }
+    }
+
     function showPreviewError(popover, message) {
         popover.classList.add('is-error');
         popover.replaceChildren();
@@ -548,16 +612,27 @@
             setPreviewBadge(popover, '缩略图 · 加载原图...');
         }
 
+        setPreviewProgress(popover, '解析原图地址...');
+        const slowTimer = setTimeout(() => {
+            if (currentPreview && currentPreview.card === card) {
+                setPreviewProgress(popover, '加载较慢，仍在尝试...');
+            }
+        }, 3000);
+
         try {
             const preview = await resolveDownload(card, wallpaperId);
             if (currentPreview && currentPreview.card === card) {
+                setPreviewProgress(popover, '加载原图中...');
                 await loadPreviewImage(popover, preview.url, { preserveExisting: true, metaText: previewMetaText });
                 clearPreviewBadge(popover);
+                clearPreviewProgress(popover);
             }
         } catch (error) {
             if (currentPreview && currentPreview.card === card) {
                 showPreviewError(popover, error.message || '预览加载失败');
             }
+        } finally {
+            clearTimeout(slowTimer);
         }
     }
 

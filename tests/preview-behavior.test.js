@@ -35,6 +35,12 @@ assert(
 );
 
 assert(
+    source.includes('whfd-preview-progress')
+        && source.includes('whfd-preview-spinner'),
+    'preview should include a loading progress area with a spinner'
+);
+
+assert(
     /function getPreviewMetaText\(/.test(source),
     'preview should extract resolution metadata from the hovered card'
 );
@@ -49,6 +55,19 @@ assert(
         && /loadPreviewImage\(popover, preview\.url, \{[^}]*metaText: previewMetaText[^}]*\}\)/.test(source)
         && /appendPreviewMeta\(popover, options\.metaText\)/.test(source),
     'preview should append extracted metadata below both thumbnail and full-resolution preview images'
+);
+
+assert(
+    /function setPreviewProgress\(/.test(source)
+        && /function clearPreviewProgress\(/.test(source),
+    'preview should have helpers for updating and clearing loading progress'
+);
+
+assert(
+    /setPreviewProgress\(popover, '解析原图地址\.\.\.'\)/.test(source)
+        && /setPreviewProgress\(popover, '加载原图中\.\.\.'\)/.test(source)
+        && /加载较慢，仍在尝试/.test(source),
+    'preview should show address resolution, image loading, and slow-loading states'
 );
 
 assert(
