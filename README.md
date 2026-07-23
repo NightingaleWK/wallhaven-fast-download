@@ -52,6 +52,7 @@ https://wallhaven.cc/*
 ```sh
 node --check main.js
 node tests/preview-behavior.test.js
+node tests/resource-lifecycle.test.js
 ```
 
 `node --check` 只检查 JavaScript 语法，不会验证浏览器环境、用户脚本 API 或 Wallhaven 页面行为。涉及交互变化时，还需要在 Tampermonkey 或 Violentmonkey 中手动验证。

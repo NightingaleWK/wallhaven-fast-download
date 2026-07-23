@@ -25,8 +25,21 @@ assert(
 assert(
     /timeout: 8000/.test(source)
         && /ontimeout:/.test(source)
-        && /detailInfoCache\.delete\(wallpaperId\)/.test(source),
-    'detail fallback should time out and allow a later hover to retry after failure'
+        && /requestWallpaperDetail\(wallpaperId, previewTask\)/.test(source)
+        && /previewTask\.addCleanup/.test(source),
+    'detail fallback should time out and be canceled with the active preview task'
+);
+
+assert(
+    source.includes('// @noframes')
+        && /if \(!isGridListingPage\(\)\) \{\s*return;\s*\}/.test(source),
+    'the userscript should not initialize observers inside frames or non-listing pages'
+);
+
+assert(
+    /cacheLimit: 120/.test(source)
+        && /while \(cache\.size > CONFIG\.cacheLimit\)/.test(source),
+    'page-lifetime caches should have a bounded LRU size'
 );
 
 assert(
@@ -66,13 +79,45 @@ assert(
 
 assert(
     /URL\.createObjectURL\(blob\)/.test(source)
-        && /URL\.revokeObjectURL\(objectUrl\)/.test(source),
+        && /URL\.revokeObjectURL\(objectUrl\)/.test(source)
+        && /let revoked = false/.test(source),
     'preview Blob URLs should be released after image decoding'
 );
 
 assert(
-    /currentPreview\.abort\(\)/.test(source),
-    'leaving a card should abort its active original-image transfer'
+    /function createPreviewTask\(/.test(source)
+        && /previewTask\.dispose\(\)/.test(source)
+        && /cleanups\.clear\(\)/.test(source),
+    'leaving a card should dispose every resource owned by its preview task'
+);
+
+assert(
+    /previewDecodeTimeout: 15000/.test(source)
+        && /预览图片解码超时/.test(source)
+        && /image\.removeAttribute\('src'\)/.test(source),
+    'Blob image decoding should have a timeout and an active cancellation path'
+);
+
+assert(
+    /downloadTimeout: 120000/.test(source)
+        && /timeout: CONFIG\.downloadTimeout/.test(source)
+        && /ontimeout: \(\) => finish\(reject, new Error\('下载超时'\)\)/.test(source)
+        && /onabort: \(\) => finish\(reject, new Error\('下载已取消'\)\)/.test(source),
+    'downloads should always leave the loading state after timeout or cancellation'
+);
+
+assert(
+    /new MutationObserver\(\(mutations\)/.test(source)
+        && /mutation\.addedNodes/.test(source)
+        && /if \(!hasNewCard\) \{\s*return;/.test(source),
+    'progress DOM updates should not trigger repeated full-card scans'
+);
+
+assert(
+    /window\.addEventListener\('pagehide'/.test(source)
+        && /observer\.disconnect\(\)/.test(source)
+        && /successfulDownloadCache\.clear\(\)/.test(source),
+    'page teardown should disconnect observers and clear retained cache state'
 );
 
 assert(
@@ -102,7 +147,7 @@ assert(
 );
 
 assert(
-    /loadPreviewImage\(popover, thumbnailPreview\.url, \{ metaText: previewMetaText \}\)/.test(source)
+    /loadPreviewImage\(popover, thumbnailPreview\.url, \{[^}]*metaText: previewMetaText[^}]*\}\)/.test(source)
         && /loadPreviewBlob\(popover, download\.url, \{[^}]*metaText: previewMetaText[^}]*\}/.test(source)
         && /appendPreviewMeta\(popover, options\.metaText\)/.test(source),
     'preview should append extracted metadata below both thumbnail and full-resolution preview images'

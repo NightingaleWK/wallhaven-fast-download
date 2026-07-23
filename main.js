@@ -15,8 +15,9 @@
 // @grant               GM_xmlhttpRequest
 // @connect             wallhaven.cc
 // @connect             w.wallhaven.cc
+// @noframes
 // @run-at              document-end
-// @version             1.5.0
+// @version             1.5.1
 // ==/UserScript==
 
 (function () {
@@ -31,6 +32,10 @@
         buttonClass: 'whfd-download-button',
         toastId: 'whfd-toast',
         previewDelay: 50,
+        previewRequestTimeout: 60000,
+        previewDecodeTimeout: 15000,
+        downloadTimeout: 120000,
+        cacheLimit: 120,
     };
 
     const STYLE_ID = 'whfd-style';
@@ -39,6 +44,27 @@
     let currentPreview = null;
     let previewTimeout = null;
     let hoveredCard = null;
+
+    function getCacheValue(cache, key) {
+        if (!cache.has(key)) {
+            return null;
+        }
+
+        const value = cache.get(key);
+        cache.delete(key);
+        cache.set(key, value);
+        return value;
+    }
+
+    function setCacheValue(cache, key, value) {
+        cache.delete(key);
+        cache.set(key, value);
+
+        while (cache.size > CONFIG.cacheLimit) {
+            const oldestKey = cache.keys().next().value;
+            cache.delete(oldestKey);
+        }
+    }
 
     function injectStyles() {
         if (document.getElementById(STYLE_ID)) {
@@ -354,79 +380,97 @@
         return [...new Set(extensions)].map((extension) => buildDirectDownload(wallpaperId, extension));
     }
 
-    function requestWallpaperDetail(wallpaperId) {
+    function requestWallpaperDetail(wallpaperId, previewTask = null) {
         return new Promise((resolve, reject) => {
             const xhr = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : null;
+            let requestControl = null;
+            let settled = false;
+            let unregisterCleanup = () => { };
+
+            const finish = (callback, value) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                unregisterCleanup();
+                requestControl = null;
+                callback(value);
+            };
+
             if (!xhr) {
                 reject(new Error('GM_xmlhttpRequest is unavailable'));
                 return;
             }
 
-            xhr({
-                method: 'GET',
-                url: `https://wallhaven.cc/w/${encodeURIComponent(wallpaperId)}`,
-                responseType: 'text',
-                timeout: 8000,
-                onload: (response) => {
-                    if (response.status < 200 || response.status >= 300) {
-                        reject(new Error(`详情页请求失败（${response.status}）`));
-                        return;
-                    }
-
-                    try {
-                        const documentText = response.responseText || response.response || '';
-                        const detailDocument = new DOMParser().parseFromString(documentText, 'text/html');
-                        const wallpaper = detailDocument.querySelector('#wallpaper[src]');
-                        if (!wallpaper) {
-                            reject(new Error('详情页中未找到原图地址'));
+            try {
+                requestControl = xhr({
+                    method: 'GET',
+                    url: `https://wallhaven.cc/w/${encodeURIComponent(wallpaperId)}`,
+                    responseType: 'text',
+                    timeout: 8000,
+                    onload: (response) => {
+                        if (response.status < 200 || response.status >= 300) {
+                            finish(reject, new Error(`详情页请求失败（${response.status}）`));
                             return;
                         }
 
-                        const downloadUrl = new URL(wallpaper.getAttribute('src'), location.origin);
-                        if (downloadUrl.hostname !== 'w.wallhaven.cc') {
-                            reject(new Error('详情页返回了非预期的原图地址'));
-                            return;
-                        }
-                        const fileName = decodeURIComponent(downloadUrl.pathname.split('/').pop() || `wallhaven-${wallpaperId}`);
+                        try {
+                            const documentText = response.responseText || response.response || '';
+                            const detailDocument = new DOMParser().parseFromString(documentText, 'text/html');
+                            const wallpaper = detailDocument.querySelector('#wallpaper[src]');
+                            if (!wallpaper) {
+                                finish(reject, new Error('详情页中未找到原图地址'));
+                                return;
+                            }
 
-                        resolve({
-                            url: downloadUrl.href,
-                            name: fileName,
-                        });
-                    } catch (error) {
-                        reject(error);
-                    }
-                },
-                onerror: () => {
-                    reject(new Error('详情页请求失败'));
-                },
-                ontimeout: () => {
-                    reject(new Error('详情页请求超时'));
-                },
-                onabort: () => {
-                    reject(new Error('详情页请求已取消'));
-                },
-            });
+                            const downloadUrl = new URL(wallpaper.getAttribute('src'), location.origin);
+                            if (downloadUrl.hostname !== 'w.wallhaven.cc') {
+                                finish(reject, new Error('详情页返回了非预期的原图地址'));
+                                return;
+                            }
+                            const fileName = decodeURIComponent(downloadUrl.pathname.split('/').pop() || `wallhaven-${wallpaperId}`);
+
+                            finish(resolve, {
+                                url: downloadUrl.href,
+                                name: fileName,
+                            });
+                        } catch (error) {
+                            finish(reject, error);
+                        }
+                    },
+                    onerror: () => finish(reject, new Error('详情页请求失败')),
+                    ontimeout: () => finish(reject, new Error('详情页请求超时')),
+                    onabort: () => finish(reject, new Error('详情页请求已取消')),
+                });
+
+                if (previewTask) {
+                    unregisterCleanup = previewTask.addCleanup(() => {
+                        if (requestControl && typeof requestControl.abort === 'function') {
+                            requestControl.abort();
+                        }
+                        finish(reject, new Error('详情页请求已取消'));
+                    });
+                }
+            } catch (error) {
+                finish(reject, error);
+            }
         });
     }
 
-    function fetchWallpaperDetail(wallpaperId) {
-        if (detailInfoCache.has(wallpaperId)) {
-            return detailInfoCache.get(wallpaperId);
+    async function fetchWallpaperDetail(wallpaperId, previewTask = null) {
+        const cachedDetail = getCacheValue(detailInfoCache, wallpaperId);
+        if (cachedDetail) {
+            return cachedDetail;
         }
 
-        const detailInfo = requestWallpaperDetail(wallpaperId)
-            .catch((error) => {
-                detailInfoCache.delete(wallpaperId);
-                throw error;
-            });
-        detailInfoCache.set(wallpaperId, detailInfo);
+        const detailInfo = await requestWallpaperDetail(wallpaperId, previewTask);
+        setCacheValue(detailInfoCache, wallpaperId, detailInfo);
         return detailInfo;
     }
 
     function getDownloadCandidates(card, wallpaperId) {
         const directCandidates = getDirectDownloadCandidates(card, wallpaperId);
-        const cachedDownload = successfulDownloadCache.get(wallpaperId);
+        const cachedDownload = getCacheValue(successfulDownloadCache, wallpaperId);
         if (!cachedDownload) {
             return directCandidates;
         }
@@ -443,16 +487,32 @@
         }
 
         return new Promise((resolve, reject) => {
-            GM_download({
-                url,
-                name,
-                saveAs: false,
-                onload: () => resolve(),
-                onerror: (error) => {
-                    const message = error && (error.error || error.message) ? (error.error || error.message) : 'Download failed';
-                    reject(new Error(message));
-                },
-            });
+            let settled = false;
+            const finish = (callback, value) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                callback(value);
+            };
+
+            try {
+                GM_download({
+                    url,
+                    name,
+                    saveAs: false,
+                    timeout: CONFIG.downloadTimeout,
+                    onload: () => finish(resolve),
+                    onerror: (error) => {
+                        const message = error && (error.error || error.message) ? (error.error || error.message) : 'Download failed';
+                        finish(reject, new Error(message));
+                    },
+                    ontimeout: () => finish(reject, new Error('下载超时')),
+                    onabort: () => finish(reject, new Error('下载已取消')),
+                });
+            } catch (error) {
+                finish(reject, error);
+            }
         });
     }
 
@@ -473,7 +533,11 @@
                     await downloadFile(download.url, download.name);
                     completedDownload = download;
                     break;
-                } catch { }
+                } catch (error) {
+                    if (error.message === '下载超时' || error.message === '下载已取消') {
+                        throw error;
+                    }
+                }
             }
 
             if (!completedDownload) {
@@ -482,7 +546,7 @@
                 completedDownload = detailDownload;
             }
 
-            successfulDownloadCache.set(wallpaperId, completedDownload);
+            setCacheValue(successfulDownloadCache, wallpaperId, completedDownload);
             triggerSeenTracking(wallpaperId);
             setDownloadButtonState(button, 'success');
             setTimeout(() => {
@@ -515,16 +579,47 @@
         event.stopPropagation();
     }
 
+    function createPreviewTask(card, popover) {
+        const cleanups = new Set();
+
+        return {
+            card,
+            popover,
+            disposed: false,
+            addCleanup(cleanup) {
+                if (this.disposed) {
+                    cleanup();
+                    return () => { };
+                }
+
+                cleanups.add(cleanup);
+                return () => cleanups.delete(cleanup);
+            },
+            dispose() {
+                if (this.disposed) {
+                    return;
+                }
+
+                this.disposed = true;
+                for (const cleanup of [...cleanups]) {
+                    try {
+                        cleanup();
+                    } catch { }
+                }
+                cleanups.clear();
+                popover.remove();
+            },
+        };
+    }
+
     function closeCurrentPreview() {
         if (!currentPreview) {
             return;
         }
 
-        if (typeof currentPreview.abort === 'function') {
-            currentPreview.abort();
-        }
-        currentPreview.popover.remove();
+        const previewTask = currentPreview;
         currentPreview = null;
+        previewTask.dispose();
     }
 
     function getPreviewWidth(card, figure) {
@@ -732,34 +827,93 @@
     function loadPreviewImage(popover, url, options = {}) {
         return new Promise((resolve, reject) => {
             const image = document.createElement('img');
+            let settled = false;
+            let timeoutId = null;
+            let unregisterCleanup = () => { };
             image.alt = '快速预览';
             image.decoding = 'async';
 
-            image.addEventListener('load', () => {
-                if (options.preserveExisting) {
-                    popover.replaceChildren(image);
-                    appendPreviewMeta(popover, options.metaText);
+            const cleanup = () => {
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
                 }
-                resolve();
-            }, { once: true });
+                image.removeEventListener('load', handleLoad);
+                image.removeEventListener('error', handleError);
+                unregisterCleanup();
+            };
 
-            image.addEventListener('error', () => {
-                reject(new Error('预览图片加载失败'));
-            }, { once: true });
+            const finish = (callback, value) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                cleanup();
+                callback(value);
+            };
+
+            const handleLoad = () => {
+                try {
+                    if (options.preserveExisting) {
+                        popover.replaceChildren(image);
+                        appendPreviewMeta(popover, options.metaText);
+                    }
+                    finish(resolve);
+                } catch (error) {
+                    finish(reject, error);
+                }
+            };
+
+            const handleError = () => finish(reject, new Error('预览图片加载失败'));
+            const cancel = () => {
+                if (settled) {
+                    return;
+                }
+                image.removeAttribute('src');
+                finish(reject, new Error('预览图片加载已取消'));
+            };
+
+            image.addEventListener('load', handleLoad, { once: true });
+            image.addEventListener('error', handleError, { once: true });
+
+            if (options.previewTask) {
+                unregisterCleanup = options.previewTask.addCleanup(cancel);
+                if (settled) {
+                    return;
+                }
+            }
 
             if (!options.preserveExisting) {
                 popover.replaceChildren(image);
                 appendPreviewMeta(popover, options.metaText);
             }
+
+            if (options.timeout > 0) {
+                timeoutId = setTimeout(() => {
+                    image.removeAttribute('src');
+                    finish(reject, new Error('预览图片解码超时'));
+                }, options.timeout);
+            }
             image.src = url;
         });
     }
 
-    function requestPreviewBlob(url, onProgress) {
+    function requestPreviewBlob(url, onProgress, previewTask) {
         const xhr = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : null;
         let requestControl = null;
+        let settled = false;
+        let unregisterCleanup = () => { };
 
         const promise = new Promise((resolve, reject) => {
+            const finish = (callback, value) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                unregisterCleanup();
+                requestControl = null;
+                callback(value);
+            };
+
             if (!xhr) {
                 reject(new Error('GM_xmlhttpRequest is unavailable'));
                 return;
@@ -770,61 +924,73 @@
                     method: 'GET',
                     url,
                     responseType: 'blob',
-                    timeout: 60000,
+                    timeout: CONFIG.previewRequestTimeout,
                     onprogress: (event) => {
-                        onProgress(event.loaded || 0, event.total || 0, event.lengthComputable);
+                        if (!settled) {
+                            try {
+                                onProgress(event.loaded || 0, event.total || 0, event.lengthComputable);
+                            } catch { }
+                        }
                     },
                     onload: (response) => {
                         if (response.status < 200 || response.status >= 300) {
-                            reject(new Error(`原图请求失败（${response.status}）`));
+                            finish(reject, new Error(`原图请求失败（${response.status}）`));
                             return;
                         }
                         if (!response.response || typeof response.response.size !== 'number') {
-                            reject(new Error('用户脚本管理器未返回有效图片数据'));
+                            finish(reject, new Error('用户脚本管理器未返回有效图片数据'));
                             return;
                         }
-                        resolve(response.response);
+                        finish(resolve, response.response);
                     },
-                    onerror: () => reject(new Error('原图请求失败')),
-                    ontimeout: () => reject(new Error('原图请求超时')),
-                    onabort: () => reject(new Error('原图请求已取消')),
+                    onerror: () => finish(reject, new Error('原图请求失败')),
+                    ontimeout: () => finish(reject, new Error('原图请求超时')),
+                    onabort: () => finish(reject, new Error('原图请求已取消')),
+                });
+
+                unregisterCleanup = previewTask.addCleanup(() => {
+                    if (requestControl && typeof requestControl.abort === 'function') {
+                        requestControl.abort();
+                    }
+                    finish(reject, new Error('原图请求已取消'));
                 });
             } catch (error) {
-                reject(error);
+                finish(reject, error);
             }
         });
 
-        return {
-            promise,
-            abort: () => {
-                if (requestControl && typeof requestControl.abort === 'function') {
-                    requestControl.abort();
-                }
-            },
-        };
+        return promise;
     }
 
     async function loadPreviewBlob(popover, url, options = {}) {
-        const previewRequest = requestPreviewBlob(url, (loaded, total, lengthComputable) => {
+        const blob = await requestPreviewBlob(url, (loaded, total, lengthComputable) => {
             if (typeof options.onProgress === 'function') {
                 options.onProgress(loaded, total, lengthComputable);
             }
-        });
-
-        if (typeof options.onRequestStart === 'function') {
-            options.onRequestStart(previewRequest.abort);
-        }
-
-        const blob = await previewRequest.promise;
+        }, options.previewTask);
         if (typeof options.onProgress === 'function') {
             options.onProgress(blob.size, blob.size, true);
         }
 
         const objectUrl = URL.createObjectURL(blob);
+        let revoked = false;
+        const revokeObjectUrl = () => {
+            if (!revoked) {
+                revoked = true;
+                URL.revokeObjectURL(objectUrl);
+            }
+        };
+
+        const imagePromise = loadPreviewImage(popover, objectUrl, {
+            ...options,
+            timeout: CONFIG.previewDecodeTimeout,
+        });
+        const unregisterRevoke = options.previewTask.addCleanup(revokeObjectUrl);
         try {
-            await loadPreviewImage(popover, objectUrl, options);
+            await imagePromise;
         } finally {
-            URL.revokeObjectURL(objectUrl);
+            unregisterRevoke();
+            revokeObjectUrl();
         }
     }
 
@@ -836,7 +1002,7 @@
         );
     }
 
-    async function loadOriginalPreview(card, wallpaperId, popover, previewMetaText) {
+    async function loadOriginalPreview(card, wallpaperId, popover, previewMetaText, previewTask) {
         const candidates = getDownloadCandidates(card, wallpaperId);
 
         for (const [index, download] of candidates.entries()) {
@@ -852,18 +1018,14 @@
                 await loadPreviewBlob(popover, download.url, {
                     preserveExisting: true,
                     metaText: previewMetaText,
+                    previewTask,
                     onProgress: (loaded, total, lengthComputable) => {
                         if (isCurrentPreview(card, popover)) {
                             setPreviewTransferProgress(popover, loaded, total, lengthComputable);
                         }
                     },
-                    onRequestStart: (abort) => {
-                        if (isCurrentPreview(card, popover)) {
-                            currentPreview.abort = abort;
-                        }
-                    },
                 });
-                successfulDownloadCache.set(wallpaperId, download);
+                setCacheValue(successfulDownloadCache, wallpaperId, download);
                 return download;
             } catch { }
         }
@@ -874,7 +1036,7 @@
 
         setPreviewProgress(popover, '正在从详情页获取原图地址...');
         try {
-            const detailDownload = await fetchWallpaperDetail(wallpaperId);
+            const detailDownload = await fetchWallpaperDetail(wallpaperId, previewTask);
             if (!isCurrentPreview(card, popover)) {
                 return null;
             }
@@ -883,18 +1045,14 @@
             await loadPreviewBlob(popover, detailDownload.url, {
                 preserveExisting: true,
                 metaText: previewMetaText,
+                previewTask,
                 onProgress: (loaded, total, lengthComputable) => {
                     if (isCurrentPreview(card, popover)) {
                         setPreviewTransferProgress(popover, loaded, total, lengthComputable);
                     }
                 },
-                onRequestStart: (abort) => {
-                    if (isCurrentPreview(card, popover)) {
-                        currentPreview.abort = abort;
-                    }
-                },
             });
-            successfulDownloadCache.set(wallpaperId, detailDownload);
+            setCacheValue(successfulDownloadCache, wallpaperId, detailDownload);
             return detailDownload;
         } catch (error) {
             successfulDownloadCache.delete(wallpaperId);
@@ -918,15 +1076,15 @@
         const popover = buildPreviewPopover(card, figure);
         figure.appendChild(popover);
         const previewMetaText = getPreviewMetaText(card);
-        currentPreview = {
-            card,
-            popover,
-            abort: null,
-        };
+        const previewTask = createPreviewTask(card, popover);
+        currentPreview = previewTask;
 
         const thumbnailPreview = getThumbnailPreview(card, figure);
         if (thumbnailPreview) {
-            loadPreviewImage(popover, thumbnailPreview.url, { metaText: previewMetaText }).catch(() => { });
+            loadPreviewImage(popover, thumbnailPreview.url, {
+                metaText: previewMetaText,
+                previewTask,
+            }).catch(() => { });
             setPreviewBadge(popover, '缩略图 · 加载原图...');
         }
 
@@ -938,7 +1096,7 @@
         }, 3000);
 
         try {
-            const preview = await loadOriginalPreview(card, wallpaperId, popover, previewMetaText);
+            const preview = await loadOriginalPreview(card, wallpaperId, popover, previewMetaText, previewTask);
             if (preview && isCurrentPreview(card, popover)) {
                 clearPreviewBadge(popover);
                 clearPreviewProgress(popover);
@@ -1077,15 +1235,41 @@
         document.querySelectorAll(CONFIG.cardSelector).forEach(injectCard);
     }
 
+    function addedNodeContainsCard(node) {
+        if (!node || (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE)) {
+            return false;
+        }
+
+        if (
+            node.nodeType === Node.ELEMENT_NODE
+            && node.matches(CONFIG.figureSelector)
+            && node.closest(CONFIG.listingSelector)
+        ) {
+            return true;
+        }
+
+        const figure = typeof node.querySelector === 'function'
+            ? node.querySelector(CONFIG.figureSelector)
+            : null;
+        return Boolean(figure && figure.closest(CONFIG.listingSelector));
+    }
+
     function startObserver() {
-        const observer = new MutationObserver(() => {
-            if (startObserver.scheduled) {
+        let scheduledFrame = null;
+        const observer = new MutationObserver((mutations) => {
+            const hasNewCard = mutations.some((mutation) => (
+                Array.from(mutation.addedNodes).some(addedNodeContainsCard)
+            ));
+            if (!hasNewCard) {
                 return;
             }
 
-            startObserver.scheduled = true;
-            requestAnimationFrame(() => {
-                startObserver.scheduled = false;
+            if (scheduledFrame !== null) {
+                return;
+            }
+
+            scheduledFrame = requestAnimationFrame(() => {
+                scheduledFrame = null;
                 scanCards();
             });
         });
@@ -1094,12 +1278,35 @@
             childList: true,
             subtree: true,
         });
+
+        return {
+            disconnect() {
+                observer.disconnect();
+                if (scheduledFrame !== null) {
+                    cancelAnimationFrame(scheduledFrame);
+                    scheduledFrame = null;
+                }
+            },
+        };
     }
 
     function init() {
+        if (!isGridListingPage()) {
+            return;
+        }
+
         injectStyles();
         scanCards();
-        startObserver();
+        const observer = startObserver();
+
+        window.addEventListener('pagehide', () => {
+            clearTimeout(previewTimeout);
+            clearTimeout(showToast.timer);
+            closeCurrentPreview();
+            observer.disconnect();
+            successfulDownloadCache.clear();
+            detailInfoCache.clear();
+        }, { once: true });
     }
 
     if (document.readyState === 'loading') {
