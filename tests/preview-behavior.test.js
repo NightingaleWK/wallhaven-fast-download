@@ -45,8 +45,34 @@ assert(
 );
 
 assert(
-    /loadPreviewImage\(popover, download\.url, \{[^}]*preserveExisting: true[^}]*\}\)/.test(source),
+    /loadPreviewBlob\(popover, download\.url, \{[^}]*preserveExisting: true[^}]*\}/.test(source),
     'full-resolution preview should replace the thumbnail without clearing the existing preview first'
+);
+
+assert(
+    /responseType: 'blob'/.test(source)
+        && /onprogress: \(event\)/.test(source)
+        && /setPreviewTransferProgress\(/.test(source),
+    'full-resolution preview should expose real byte transfer progress'
+);
+
+assert(
+    /event\.loaded/.test(source)
+        && /event\.total/.test(source)
+        && /event\.lengthComputable/.test(source)
+        && /now - lastUpdate < 100/.test(source),
+    'preview progress should support both known and unknown response sizes'
+);
+
+assert(
+    /URL\.createObjectURL\(blob\)/.test(source)
+        && /URL\.revokeObjectURL\(objectUrl\)/.test(source),
+    'preview Blob URLs should be released after image decoding'
+);
+
+assert(
+    /currentPreview\.abort\(\)/.test(source),
+    'leaving a card should abort its active original-image transfer'
 );
 
 assert(
@@ -77,7 +103,7 @@ assert(
 
 assert(
     /loadPreviewImage\(popover, thumbnailPreview\.url, \{ metaText: previewMetaText \}\)/.test(source)
-        && /loadPreviewImage\(popover, download\.url, \{[^}]*metaText: previewMetaText[^}]*\}\)/.test(source)
+        && /loadPreviewBlob\(popover, download\.url, \{[^}]*metaText: previewMetaText[^}]*\}/.test(source)
         && /appendPreviewMeta\(popover, options\.metaText\)/.test(source),
     'preview should append extracted metadata below both thumbnail and full-resolution preview images'
 );

@@ -16,7 +16,7 @@
 // @connect             wallhaven.cc
 // @connect             w.wallhaven.cc
 // @run-at              document-end
-// @version             1.4.0
+// @version             1.5.0
 // ==/UserScript==
 
 (function () {
@@ -155,6 +155,7 @@
 
             .whfd-preview-progress {
                 display: flex;
+                flex-wrap: wrap;
                 align-items: center;
                 justify-content: center;
                 gap: 6px;
@@ -167,6 +168,37 @@
                 font-size: 12px;
                 line-height: 1.35;
                 text-align: center;
+            }
+
+            .whfd-preview-progress-track {
+                position: relative;
+                flex: 0 0 100%;
+                height: 3px;
+                overflow: hidden;
+                border-radius: 999px;
+                background: rgba(255, 255, 255, 0.14);
+            }
+
+            .whfd-preview-progress-bar {
+                width: 0;
+                height: 100%;
+                border-radius: inherit;
+                background: rgba(111, 190, 255, 0.92);
+                transition: width 0.12s ease-out;
+            }
+
+            .whfd-preview-progress.is-indeterminate .whfd-preview-progress-bar {
+                width: 38%;
+                animation: whfd-progress-slide 1.1s ease-in-out infinite;
+            }
+
+            @keyframes whfd-progress-slide {
+                from {
+                    transform: translateX(-120%);
+                }
+                to {
+                    transform: translateX(300%);
+                }
             }
 
             .whfd-preview-spinner {
@@ -488,6 +520,9 @@
             return;
         }
 
+        if (typeof currentPreview.abort === 'function') {
+            currentPreview.abort();
+        }
         currentPreview.popover.remove();
         currentPreview = null;
     }
@@ -551,7 +586,8 @@
         let progress = findDirectChildByClass(popover, 'whfd-preview-progress');
         if (!progress) {
             progress = document.createElement('div');
-            progress.className = 'whfd-preview-progress';
+            progress.className = 'whfd-preview-progress is-indeterminate';
+            progress.setAttribute('role', 'progressbar');
 
             const spinner = document.createElement('span');
             spinner.className = 'whfd-preview-spinner';
@@ -562,6 +598,15 @@
             text.className = 'whfd-preview-progress-text';
             progress.appendChild(text);
 
+            const track = document.createElement('div');
+            track.className = 'whfd-preview-progress-track';
+            track.setAttribute('aria-hidden', 'true');
+
+            const bar = document.createElement('div');
+            bar.className = 'whfd-preview-progress-bar';
+            track.appendChild(bar);
+            progress.appendChild(track);
+
             popover.appendChild(progress);
         }
 
@@ -569,6 +614,85 @@
         if (text) {
             text.textContent = message;
         }
+
+        const bar = progress.querySelector('.whfd-preview-progress-bar');
+        progress.classList.add('is-indeterminate');
+        progress.removeAttribute('aria-valuemin');
+        progress.removeAttribute('aria-valuemax');
+        progress.removeAttribute('aria-valuenow');
+        if (bar) {
+            bar.style.width = '';
+        }
+    }
+
+    function formatByteSize(bytes) {
+        if (!Number.isFinite(bytes) || bytes <= 0) {
+            return '0 KB';
+        }
+        if (bytes < 1024 * 1024) {
+            return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+        }
+        return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 1 : 2)} MB`;
+    }
+
+    function setPreviewTransferProgress(popover, loaded, total, lengthComputable, force = false) {
+        const hasTotal = Boolean(lengthComputable !== false && Number.isFinite(total) && total > 0);
+        const percent = hasTotal ? Math.min(100, Math.max(0, Math.round((loaded / total) * 100))) : null;
+        const now = performance.now();
+        const lastUpdate = Number(popover.dataset.whfdProgressUpdatedAt || 0);
+        if (!force && (!hasTotal || loaded < total) && now - lastUpdate < 100) {
+            return;
+        }
+        popover.dataset.whfdProgressUpdatedAt = String(now);
+
+        const slowText = popover.dataset.whfdSlow === '1' ? ' · 网络较慢' : '';
+        const message = hasTotal
+            ? `加载原图 ${formatByteSize(loaded)} / ${formatByteSize(total)} · ${percent}%${slowText}`
+            : `已加载 ${formatByteSize(loaded)}${slowText}`;
+
+        setPreviewProgress(popover, message);
+        const progress = findDirectChildByClass(popover, 'whfd-preview-progress');
+        if (!progress) {
+            return;
+        }
+
+        const bar = progress.querySelector('.whfd-preview-progress-bar');
+        progress.classList.toggle('is-indeterminate', !hasTotal);
+        progress.dataset.loaded = String(loaded);
+        progress.dataset.total = String(total || 0);
+        progress.dataset.lengthComputable = hasTotal ? '1' : '0';
+
+        if (hasTotal) {
+            progress.setAttribute('aria-valuemin', '0');
+            progress.setAttribute('aria-valuemax', '100');
+            progress.setAttribute('aria-valuenow', String(percent));
+            if (bar) {
+                bar.style.width = `${percent}%`;
+            }
+        } else {
+            progress.removeAttribute('aria-valuemin');
+            progress.removeAttribute('aria-valuemax');
+            progress.removeAttribute('aria-valuenow');
+            if (bar) {
+                bar.style.width = '';
+            }
+        }
+    }
+
+    function markPreviewAsSlow(popover) {
+        popover.dataset.whfdSlow = '1';
+        const progress = findDirectChildByClass(popover, 'whfd-preview-progress');
+        if (progress && progress.dataset.loaded) {
+            setPreviewTransferProgress(
+                popover,
+                Number(progress.dataset.loaded),
+                Number(progress.dataset.total),
+                progress.dataset.lengthComputable === '1',
+                true
+            );
+            return;
+        }
+        setPreviewProgress(popover, '加载较慢，仍在尝试...');
     }
 
     function clearPreviewProgress(popover) {
@@ -631,6 +755,79 @@
         });
     }
 
+    function requestPreviewBlob(url, onProgress) {
+        const xhr = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : null;
+        let requestControl = null;
+
+        const promise = new Promise((resolve, reject) => {
+            if (!xhr) {
+                reject(new Error('GM_xmlhttpRequest is unavailable'));
+                return;
+            }
+
+            try {
+                requestControl = xhr({
+                    method: 'GET',
+                    url,
+                    responseType: 'blob',
+                    timeout: 60000,
+                    onprogress: (event) => {
+                        onProgress(event.loaded || 0, event.total || 0, event.lengthComputable);
+                    },
+                    onload: (response) => {
+                        if (response.status < 200 || response.status >= 300) {
+                            reject(new Error(`原图请求失败（${response.status}）`));
+                            return;
+                        }
+                        if (!response.response || typeof response.response.size !== 'number') {
+                            reject(new Error('用户脚本管理器未返回有效图片数据'));
+                            return;
+                        }
+                        resolve(response.response);
+                    },
+                    onerror: () => reject(new Error('原图请求失败')),
+                    ontimeout: () => reject(new Error('原图请求超时')),
+                    onabort: () => reject(new Error('原图请求已取消')),
+                });
+            } catch (error) {
+                reject(error);
+            }
+        });
+
+        return {
+            promise,
+            abort: () => {
+                if (requestControl && typeof requestControl.abort === 'function') {
+                    requestControl.abort();
+                }
+            },
+        };
+    }
+
+    async function loadPreviewBlob(popover, url, options = {}) {
+        const previewRequest = requestPreviewBlob(url, (loaded, total, lengthComputable) => {
+            if (typeof options.onProgress === 'function') {
+                options.onProgress(loaded, total, lengthComputable);
+            }
+        });
+
+        if (typeof options.onRequestStart === 'function') {
+            options.onRequestStart(previewRequest.abort);
+        }
+
+        const blob = await previewRequest.promise;
+        if (typeof options.onProgress === 'function') {
+            options.onProgress(blob.size, blob.size, true);
+        }
+
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+            await loadPreviewImage(popover, objectUrl, options);
+        } finally {
+            URL.revokeObjectURL(objectUrl);
+        }
+    }
+
     function isCurrentPreview(card, popover) {
         return Boolean(
             currentPreview
@@ -642,15 +839,29 @@
     async function loadOriginalPreview(card, wallpaperId, popover, previewMetaText) {
         const candidates = getDownloadCandidates(card, wallpaperId);
 
-        for (const download of candidates) {
+        for (const [index, download] of candidates.entries()) {
             if (!isCurrentPreview(card, popover)) {
                 return null;
             }
 
+            if (index > 0) {
+                setPreviewProgress(popover, '正在尝试备用原图地址...');
+            }
+
             try {
-                await loadPreviewImage(popover, download.url, {
+                await loadPreviewBlob(popover, download.url, {
                     preserveExisting: true,
                     metaText: previewMetaText,
+                    onProgress: (loaded, total, lengthComputable) => {
+                        if (isCurrentPreview(card, popover)) {
+                            setPreviewTransferProgress(popover, loaded, total, lengthComputable);
+                        }
+                    },
+                    onRequestStart: (abort) => {
+                        if (isCurrentPreview(card, popover)) {
+                            currentPreview.abort = abort;
+                        }
+                    },
                 });
                 successfulDownloadCache.set(wallpaperId, download);
                 return download;
@@ -669,9 +880,19 @@
             }
 
             setPreviewProgress(popover, '加载详情页原图中...');
-            await loadPreviewImage(popover, detailDownload.url, {
+            await loadPreviewBlob(popover, detailDownload.url, {
                 preserveExisting: true,
                 metaText: previewMetaText,
+                onProgress: (loaded, total, lengthComputable) => {
+                    if (isCurrentPreview(card, popover)) {
+                        setPreviewTransferProgress(popover, loaded, total, lengthComputable);
+                    }
+                },
+                onRequestStart: (abort) => {
+                    if (isCurrentPreview(card, popover)) {
+                        currentPreview.abort = abort;
+                    }
+                },
             });
             successfulDownloadCache.set(wallpaperId, detailDownload);
             return detailDownload;
@@ -700,6 +921,7 @@
         currentPreview = {
             card,
             popover,
+            abort: null,
         };
 
         const thumbnailPreview = getThumbnailPreview(card, figure);
@@ -711,7 +933,7 @@
         setPreviewProgress(popover, '加载原图中...');
         const slowTimer = setTimeout(() => {
             if (isCurrentPreview(card, popover)) {
-                setPreviewProgress(popover, '加载较慢，仍在尝试...');
+                markPreviewAsSlow(popover);
             }
         }, 3000);
 
