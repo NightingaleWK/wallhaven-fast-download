@@ -16,7 +16,7 @@
 // @connect             wallhaven.cc
 // @connect             w.wallhaven.cc
 // @run-at              document-end
-// @version             1.3.0
+// @version             1.4.0
 // ==/UserScript==
 
 (function () {
@@ -34,7 +34,8 @@
     };
 
     const STYLE_ID = 'whfd-style';
-    const downloadInfoCache = new Map();
+    const successfulDownloadCache = new Map();
+    const detailInfoCache = new Map();
     let currentPreview = null;
     let previewTimeout = null;
     let hoveredCard = null;
@@ -306,8 +307,7 @@
         return 'jpg';
     }
 
-    function getFallbackDownload(card, wallpaperId) {
-        const extension = getFileExtension(card);
+    function buildDirectDownload(wallpaperId, extension) {
         const prefix = wallpaperId.slice(0, 2);
         return {
             url: `https://w.wallhaven.cc/full/${prefix}/wallhaven-${wallpaperId}.${extension}`,
@@ -315,7 +315,14 @@
         };
     }
 
-    function requestWallpaperInfo(wallpaperId) {
+    function getDirectDownloadCandidates(card, wallpaperId) {
+        const preferredExtension = getFileExtension(card);
+        const extensions = [preferredExtension, 'jpg', 'png', 'webp'];
+
+        return [...new Set(extensions)].map((extension) => buildDirectDownload(wallpaperId, extension));
+    }
+
+    function requestWallpaperDetail(wallpaperId) {
         return new Promise((resolve, reject) => {
             const xhr = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : null;
             if (!xhr) {
@@ -325,26 +332,29 @@
 
             xhr({
                 method: 'GET',
-                url: `https://wallhaven.cc/api/v1/w/${encodeURIComponent(wallpaperId)}`,
-                responseType: 'json',
+                url: `https://wallhaven.cc/w/${encodeURIComponent(wallpaperId)}`,
+                responseType: 'text',
+                timeout: 8000,
                 onload: (response) => {
                     if (response.status < 200 || response.status >= 300) {
-                        reject(new Error(`API request failed with status ${response.status}`));
+                        reject(new Error(`详情页请求失败（${response.status}）`));
                         return;
                     }
 
                     try {
-                        let payload = response.response || response.responseText || {};
-                        if (typeof payload === 'string') {
-                            payload = JSON.parse(payload);
-                        }
-                        const wallpaper = payload && payload.data ? payload.data : null;
-                        if (!wallpaper || !wallpaper.path) {
-                            reject(new Error('Missing wallpaper path'));
+                        const documentText = response.responseText || response.response || '';
+                        const detailDocument = new DOMParser().parseFromString(documentText, 'text/html');
+                        const wallpaper = detailDocument.querySelector('#wallpaper[src]');
+                        if (!wallpaper) {
+                            reject(new Error('详情页中未找到原图地址'));
                             return;
                         }
 
-                        const downloadUrl = new URL(wallpaper.path, location.origin);
+                        const downloadUrl = new URL(wallpaper.getAttribute('src'), location.origin);
+                        if (downloadUrl.hostname !== 'w.wallhaven.cc') {
+                            reject(new Error('详情页返回了非预期的原图地址'));
+                            return;
+                        }
                         const fileName = decodeURIComponent(downloadUrl.pathname.split('/').pop() || `wallhaven-${wallpaperId}`);
 
                         resolve({
@@ -356,24 +366,43 @@
                     }
                 },
                 onerror: () => {
-                    reject(new Error('API request failed'));
+                    reject(new Error('详情页请求失败'));
+                },
+                ontimeout: () => {
+                    reject(new Error('详情页请求超时'));
+                },
+                onabort: () => {
+                    reject(new Error('详情页请求已取消'));
                 },
             });
         });
     }
 
-    async function fetchWallpaperInfo(wallpaperId) {
-        return requestWallpaperInfo(wallpaperId);
-    }
-
-    async function resolveDownload(card, wallpaperId) {
-        if (downloadInfoCache.has(wallpaperId)) {
-            return downloadInfoCache.get(wallpaperId);
+    function fetchWallpaperDetail(wallpaperId) {
+        if (detailInfoCache.has(wallpaperId)) {
+            return detailInfoCache.get(wallpaperId);
         }
 
-        const downloadInfo = fetchWallpaperInfo(wallpaperId).catch(() => getFallbackDownload(card, wallpaperId));
-        downloadInfoCache.set(wallpaperId, downloadInfo);
-        return downloadInfo;
+        const detailInfo = requestWallpaperDetail(wallpaperId)
+            .catch((error) => {
+                detailInfoCache.delete(wallpaperId);
+                throw error;
+            });
+        detailInfoCache.set(wallpaperId, detailInfo);
+        return detailInfo;
+    }
+
+    function getDownloadCandidates(card, wallpaperId) {
+        const directCandidates = getDirectDownloadCandidates(card, wallpaperId);
+        const cachedDownload = successfulDownloadCache.get(wallpaperId);
+        if (!cachedDownload) {
+            return directCandidates;
+        }
+
+        return [
+            cachedDownload,
+            ...directCandidates.filter((download) => download.url !== cachedDownload.url),
+        ];
     }
 
     function downloadFile(url, name) {
@@ -404,8 +433,24 @@
 
         setDownloadButtonState(button, 'loading');
         try {
-            const download = await resolveDownload(card, wallpaperId);
-            await downloadFile(download.url, download.name);
+            let completedDownload = null;
+            const candidates = getDownloadCandidates(card, wallpaperId);
+
+            for (const download of candidates) {
+                try {
+                    await downloadFile(download.url, download.name);
+                    completedDownload = download;
+                    break;
+                } catch { }
+            }
+
+            if (!completedDownload) {
+                const detailDownload = await fetchWallpaperDetail(wallpaperId);
+                await downloadFile(detailDownload.url, detailDownload.name);
+                completedDownload = detailDownload;
+            }
+
+            successfulDownloadCache.set(wallpaperId, completedDownload);
             triggerSeenTracking(wallpaperId);
             setDownloadButtonState(button, 'success');
             setTimeout(() => {
@@ -414,6 +459,7 @@
                 }
             }, 1200);
         } catch (error) {
+            successfulDownloadCache.delete(wallpaperId);
             showToast(`下载失败：${error.message}`, true);
             setDownloadButtonState(button, 'idle');
         }
@@ -585,6 +631,56 @@
         });
     }
 
+    function isCurrentPreview(card, popover) {
+        return Boolean(
+            currentPreview
+            && currentPreview.card === card
+            && currentPreview.popover === popover
+        );
+    }
+
+    async function loadOriginalPreview(card, wallpaperId, popover, previewMetaText) {
+        const candidates = getDownloadCandidates(card, wallpaperId);
+
+        for (const download of candidates) {
+            if (!isCurrentPreview(card, popover)) {
+                return null;
+            }
+
+            try {
+                await loadPreviewImage(popover, download.url, {
+                    preserveExisting: true,
+                    metaText: previewMetaText,
+                });
+                successfulDownloadCache.set(wallpaperId, download);
+                return download;
+            } catch { }
+        }
+
+        if (!isCurrentPreview(card, popover)) {
+            return null;
+        }
+
+        setPreviewProgress(popover, '正在从详情页获取原图地址...');
+        try {
+            const detailDownload = await fetchWallpaperDetail(wallpaperId);
+            if (!isCurrentPreview(card, popover)) {
+                return null;
+            }
+
+            setPreviewProgress(popover, '加载详情页原图中...');
+            await loadPreviewImage(popover, detailDownload.url, {
+                preserveExisting: true,
+                metaText: previewMetaText,
+            });
+            successfulDownloadCache.set(wallpaperId, detailDownload);
+            return detailDownload;
+        } catch (error) {
+            successfulDownloadCache.delete(wallpaperId);
+            throw error;
+        }
+    }
+
     async function showCardPreview(card) {
         const wallpaperId = getWallpaperId(card);
         if (!wallpaperId) {
@@ -612,23 +708,21 @@
             setPreviewBadge(popover, '缩略图 · 加载原图...');
         }
 
-        setPreviewProgress(popover, '解析原图地址...');
+        setPreviewProgress(popover, '加载原图中...');
         const slowTimer = setTimeout(() => {
-            if (currentPreview && currentPreview.card === card) {
+            if (isCurrentPreview(card, popover)) {
                 setPreviewProgress(popover, '加载较慢，仍在尝试...');
             }
         }, 3000);
 
         try {
-            const preview = await resolveDownload(card, wallpaperId);
-            if (currentPreview && currentPreview.card === card) {
-                setPreviewProgress(popover, '加载原图中...');
-                await loadPreviewImage(popover, preview.url, { preserveExisting: true, metaText: previewMetaText });
+            const preview = await loadOriginalPreview(card, wallpaperId, popover, previewMetaText);
+            if (preview && isCurrentPreview(card, popover)) {
                 clearPreviewBadge(popover);
                 clearPreviewProgress(popover);
             }
         } catch (error) {
-            if (currentPreview && currentPreview.card === card) {
+            if (isCurrentPreview(card, popover)) {
                 showPreviewError(popover, error.message || '预览加载失败');
             }
         } finally {

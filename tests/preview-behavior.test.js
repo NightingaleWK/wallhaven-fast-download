@@ -5,8 +5,33 @@ const assert = require('assert');
 const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 
 assert(
-    source.includes('const downloadInfoCache = new Map();'),
-    'preview/download URL resolution should be cached by wallpaper id'
+    source.includes('const successfulDownloadCache = new Map();'),
+    'only successful preview/download URL resolution should be cached by wallpaper id'
+);
+
+assert(
+    /function getDirectDownloadCandidates\(/.test(source)
+        && /const extensions = \[preferredExtension, 'jpg', 'png', 'webp'\]/.test(source),
+    'original image resolution should try deterministic CDN candidates before network metadata requests'
+);
+
+assert(
+    /function requestWallpaperDetail\(/.test(source)
+        && /url: `https:\/\/wallhaven\.cc\/w\/\$\{encodeURIComponent\(wallpaperId\)\}`/.test(source)
+        && /detailDocument\.querySelector\('#wallpaper\[src\]'\)/.test(source),
+    'failed direct candidates should fall back to the same original URL exposed by the detail page'
+);
+
+assert(
+    /timeout: 8000/.test(source)
+        && /ontimeout:/.test(source)
+        && /detailInfoCache\.delete\(wallpaperId\)/.test(source),
+    'detail fallback should time out and allow a later hover to retry after failure'
+);
+
+assert(
+    !source.includes('/api/v1/w/'),
+    'hover preview should not consume the rate-limited wallpaper API'
 );
 
 assert(
@@ -20,7 +45,7 @@ assert(
 );
 
 assert(
-    /loadPreviewImage\(popover, preview\.url, \{[^}]*preserveExisting: true[^}]*\}\)/.test(source),
+    /loadPreviewImage\(popover, download\.url, \{[^}]*preserveExisting: true[^}]*\}\)/.test(source),
     'full-resolution preview should replace the thumbnail without clearing the existing preview first'
 );
 
@@ -52,7 +77,7 @@ assert(
 
 assert(
     /loadPreviewImage\(popover, thumbnailPreview\.url, \{ metaText: previewMetaText \}\)/.test(source)
-        && /loadPreviewImage\(popover, preview\.url, \{[^}]*metaText: previewMetaText[^}]*\}\)/.test(source)
+        && /loadPreviewImage\(popover, download\.url, \{[^}]*metaText: previewMetaText[^}]*\}\)/.test(source)
         && /appendPreviewMeta\(popover, options\.metaText\)/.test(source),
     'preview should append extracted metadata below both thumbnail and full-resolution preview images'
 );
@@ -64,10 +89,10 @@ assert(
 );
 
 assert(
-    /setPreviewProgress\(popover, '解析原图地址\.\.\.'\)/.test(source)
-        && /setPreviewProgress\(popover, '加载原图中\.\.\.'\)/.test(source)
+    /setPreviewProgress\(popover, '加载原图中\.\.\.'\)/.test(source)
+        && /正在从详情页获取原图地址/.test(source)
         && /加载较慢，仍在尝试/.test(source),
-    'preview should show address resolution, image loading, and slow-loading states'
+    'preview should show direct loading, detail fallback, and slow-loading states'
 );
 
 assert(
